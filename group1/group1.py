@@ -11,6 +11,9 @@ class Jcards_db:
         """
         pass
 
+class RAG_write:
+    def embed_chunk(query: str) -> List[float]:
+        """向量数据库写入"""
 
 class Embed_db:
     """向量数据库接口类"""
@@ -261,21 +264,3 @@ class Agent:
         pass
 
 
-class Main:
-    """
-    主程序类，负责程序的整体流程控制
-    """
-
-    def __init__(self):
-        """初始化主程序类"""
-        self.jcards_db: Jcards_db = Jcards_db()  # Jcards数据库实例
-        self.embed_db: Embed_db = Embed_db()  # 向量数据库实例
-        self.RAG_query: RAG_query = RAG_query()  # RAG查询实例
-        self.agent: Agent = Agent()  # Agent实例
-
-    def main_loop(self) -> None:
-        """
-        实现程序的主循环：输入提示词、写入、查询、输出内容、继续写入提示词，
-        直到用户决定结束循环。所有属性在循环开始之前都会被定义好
-        """
-        pass
