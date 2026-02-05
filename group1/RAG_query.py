@@ -1,5 +1,11 @@
 from typing import List, Tuple, Optional, Any
 import json
+import sys
+from pathlib import Path
+
+# 添加 group3 到路径以导入 embed_chunk
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from group3.rag_ingest_incremental import embed_chunk as group3_embed_chunk
 
 
 class Jcards_db:
@@ -63,29 +69,6 @@ class RAG_query:
         """
         self.Jcards = jcards_db.get_Jcards_tostr()
 
-    def shuffle_Jcards(self, query: str) -> None:
-        """
-        将所有Jcards中筛选与提示词相关的Jcards，存入属性shuffled_Jcards
-
-        Args:
-            query: 用户查询
-        """
-        if not self.Jcards:
-            self.shuffled_Jcards = []
-            return
-
-        # 这里实现筛选逻辑，可以根据query与Jcards的相关性进行筛选
-        # 示例：简单的关键词匹配筛选
-        relevant_jcards = []
-        query_keywords = query.lower().split()
-
-        for jcard in self.Jcards:
-            jcard_lower = jcard.lower()
-            # 检查是否有任何关键词出现在jcard中
-            if any(keyword in jcard_lower for keyword in query_keywords):
-                relevant_jcards.append(jcard)
-
-        self.shuffled_Jcards = relevant_jcards if relevant_jcards else self.Jcards
 
     def retrieve(self, query: str, embed_db: Embed_db, top_k: int = None) -> None:
         """
@@ -107,7 +90,8 @@ class RAG_query:
         # 调用向量数据库查询
         self.retrieved_chunks = embed_db.query(query_embeddings, self.top_k)
 
-    def rerank(self, query: str, top_k: int = 3) -> None:
+
+    def rerank(self, query: str, retrieved_chunks: List[str], top_k: int = 3) -> None:
         """
         重排，赋值重排后选出的前三个最相关的片段给reranked_chunks
 
@@ -117,21 +101,19 @@ class RAG_query:
         """
         if not self.retrieved_chunks:
             self.reranked_chunks = []
+            print("召回结果为空！请先进行召回！")
             return
+        from sentence_transformers import CrossEncoder
+        cross_encoder = CrossEncoder('cross-encoder/mmarco-mMiniLMv2-L12-H384-v1')
+        pairs = [(query, chunk) for chunk in retrieved_chunks]
+        scores = cross_encoder.predict(pairs)
 
-        # 这里实现重排逻辑
-        # 示例：简单的基于相似度的重排
-        ranked_chunks = []
-        for chunk in self.retrieved_chunks:
-            # 计算chunk与query的相似度（这里使用简单的关键词匹配）
-            similarity = self._calculate_similarity(query, chunk)
-            ranked_chunks.append((similarity, chunk))
+        scored_chunks = list(zip(retrieved_chunks, scores))
+        scored_chunks.sort(key=lambda x: x[1], reverse=True)
 
-        # 按相似度排序
-        ranked_chunks.sort(reverse=True, key=lambda x: x[0])
+        self.reranked_chunks = [chunk for chunk, _ in scored_chunks][:top_k]
 
-        # 取前top_k个
-        self.reranked_chunks = [chunk for _, chunk in ranked_chunks[:top_k]]
+
 
     def return_reranked_chunks(self, query: str, jcards_db: Jcards_db,
                                embed_db: Embed_db) -> List[str]:
@@ -151,9 +133,6 @@ class RAG_query:
         # 1. 获取Jcards
         self.ask_Jcards(jcards_db)
 
-        # 2. 筛选与查询相关的Jcards
-        self.shuffle_Jcards(query)
-
         # 3. 召回相关片段
         self.retrieve(query, embed_db)
 
@@ -162,9 +141,9 @@ class RAG_query:
 
         return self.reranked_chunks
 
-    def _get_query_embeddings(self, query: str, RAG_write: RAG_write) -> List[float]:
+    def _get_query_embeddings(self, query: str) -> List[float]:
         """
-        将查询文本转换为向量表示
+        将查询文本转换为向量表示（使用 group3 的 embed_chunk）
 
         Args:
             query: 查询文本
@@ -172,9 +151,7 @@ class RAG_query:
         Returns:
             查询向量
         """
-
-        embeddings = RAG_write.embed_chunk(query)
-        return embeddings
+        return group3_embed_chunk(query)
 
     def _calculate_similarity(self, query: str, chunk: str) -> float:
         """
@@ -202,53 +179,53 @@ class RAG_query:
         return intersection / union if union > 0 else 0.0
 
 
-class Agent:
-    """
-    Agent类，负责处理用户请求和协调各个组件
-    """
+# class Agent:
+#     """
+#     Agent类，负责处理用户请求和协调各个组件
+#     """
 
-    def __init__(self):
-        """初始化Agent类"""
-        self.Active: bool = False  # agent是否应该主动提醒
-        self.Jcards: List[str] = []  # Jcards字符串集
-        self.active_content: List[str] = []  # 从主动服务类中得到的主动服务事件卡内容
-        self.input: str = ""  # 用户提示词
+#     def __init__(self):
+#         """初始化Agent类"""
+#         self.Active: bool = False  # agent是否应该主动提醒
+#         self.Jcards: List[str] = []  # Jcards字符串集
+#         self.active_content: List[str] = []  # 从主动服务类中得到的主动服务事件卡内容
+#         self.input: str = ""  # 用户提示词
 
-    def process_request(self, input: str, Jcards: List[str]) -> str:
-        """
-         接收用户输入, 将主动警示的提示词和jcards拼在一起，调用模型api
+#     def process_request(self, input: str, Jcards: List[str]) -> str:
+#         """
+#          接收用户输入, 将主动警示的提示词和jcards拼在一起，调用模型api
 
-        Args:
-            input: 用户输入
-            Jcards: Jcards字符串列表
+#         Args:
+#             input: 用户输入
+#             Jcards: Jcards字符串列表
 
-        Returns:
-            模型生成的回答
-        """
-        pass
+#         Returns:
+#             模型生成的回答
+#         """
+#         pass
 
-    def active_service(self, active_service: Active_service) -> None:
-        """
-        对应图中"主动服务检查"，根据Active值判断是否警示，并实现警示逻辑。
-        引用get_active函数向Active和active_content属性赋值
+#     # def active_service(self, active_service: Active_service) -> None:
+#     #     """
+#     #     对应图中"主动服务检查"，根据Active值判断是否警示，并实现警示逻辑。
+#     #     引用get_active函数向Active和active_content属性赋值
 
-        Args:
-            active_service: 主动服务实例
-        """
-        pass
+#     #     Args:
+#     #         active_service: 主动服务实例
+#     #     """
+#     #     pass
 
-    def Jcards_update(self, Jcards: List[str], active_content: List[str],
-                      input: str) -> None:
-        """
-        将Jcards，提示词，主动服务卡全部喂给模型，让它判断是否需要更新Jcards。
-        如果需要，则把更新内容赋值给Jcards属性，同时存储到Jcards_db。
-        如果不需要则什么也不做
+#     def Jcards_update(self, Jcards: List[str], active_content: List[str],
+#                       input: str) -> None:
+#         """
+#         将Jcards，提示词，主动服务卡全部喂给模型，让它判断是否需要更新Jcards。
+#         如果需要，则把更新内容赋值给Jcards属性，同时存储到Jcards_db。
+#         如果不需要则什么也不做
 
-        Args:
-            Jcards: Jcards字符串列表
-            active_content: 主动服务卡内容
-            input: 用户提示词
-        """
-        pass
+#         Args:
+#             Jcards: Jcards字符串列表
+#             active_content: 主动服务卡内容
+#             input: 用户提示词
+#         """
+#         pass
 
 
