@@ -385,6 +385,64 @@ def load_events_from_jsonl(path: str) -> List[MemoryEvent]:
     return events
 
 
+def write_memory_events(
+    events: Iterable[MemoryEvent | Dict[str, Any]],
+    *,
+    persist_dir: str = ".vector_store",
+    embed_model: str = "BAAI/bge-small-zh-v1.5",
+    chunk_cfg: Optional[ChunkingConfig] = None,
+    batch_size: int = 32,
+) -> Dict[str, Any]:
+    """
+    Tool入口：将 MemoryEvent 列表增量写入向量库。
+
+    - 输入：MemoryEvent 或 dict（会自动转换）
+    - 输出：写入结果（records/upserted/errors）
+    """
+    normalized: List[MemoryEvent] = []
+    for e in events:
+        if isinstance(e, MemoryEvent):
+            normalized.append(e)
+        elif isinstance(e, dict):
+            normalized.append(MemoryEvent(**e))
+        else:
+            raise TypeError(f"Unsupported event type: {type(e)}")
+
+    if not normalized:
+        return {"records": 0, "upserted": 0, "errors": []}
+
+    cfg = chunk_cfg or ChunkingConfig()
+    records = build_chunk_records(normalized, chunk_cfg=cfg)
+
+    service = EmbeddingService.get_instance(embed_model)
+    embeddings = service.embed_batch([r.text for r in records], batch_size=batch_size)
+
+    svc = SQLiteVectorStoreService(VectorStoreConfig(persist_dir=persist_dir))
+    res = svc.upsert_records(records, embeddings=embeddings)
+    return {"records": len(records), **res}
+
+
+def write_memory_events_from_jsonl(
+    path: str,
+    *,
+    persist_dir: str = ".vector_store",
+    embed_model: str = "BAAI/bge-small-zh-v1.5",
+    chunk_cfg: Optional[ChunkingConfig] = None,
+    batch_size: int = 32,
+) -> Dict[str, Any]:
+    """
+    Tool入口：从 JSONL 读取 MemoryEvent 并写入向量库。
+    """
+    events = load_events_from_jsonl(path)
+    return write_memory_events(
+        events,
+        persist_dir=persist_dir,
+        embed_model=embed_model,
+        chunk_cfg=chunk_cfg,
+        batch_size=batch_size,
+    )
+
+
 def main() -> None:
     # Windows 终端常见编码导致中文日志乱码；尽量强制 UTF-8 输出方便调试
     try:
@@ -409,15 +467,13 @@ def main() -> None:
         overlap_chars=args.overlap_chars,
         chunk_version=args.chunk_version,
     )
-    records = build_chunk_records(events, chunk_cfg=chunk_cfg)
-
-    model = SentenceTransformer(args.embed_model)
-    embeddings = embed_texts(model, [r.text for r in records])
-
-    # SQLite 实现不需要 collection_name；保留参数仅为 CLI 兼容（未来可换成真正向量库）
-    svc = SQLiteVectorStoreService(VectorStoreConfig(persist_dir=args.persist_dir))
-    res = svc.upsert_records(records, embeddings=embeddings)
-    print(json.dumps({"records": len(records), **res}, ensure_ascii=False, indent=2))
+    res = write_memory_events(
+        events,
+        persist_dir=args.persist_dir,
+        embed_model=args.embed_model,
+        chunk_cfg=chunk_cfg,
+    )
+    print(json.dumps(res, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
