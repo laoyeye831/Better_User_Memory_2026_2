@@ -6,7 +6,6 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/group1/ReAct.py",
-            "args": ["--interactive"],
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}"
         }

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import re
 import sys
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -353,6 +354,19 @@ class EmbeddingService:
         )
         
         return np.asarray(embeddings, dtype=np.float32).tolist()
+
+
+def embed_chunk(query: str) -> List[float]:
+    """
+    将单个查询字符串向量化（模块级便捷函数，供外部如 RAG_query 调用）。
+
+    参数:
+        query: 用户提示词/查询内容
+
+    返回:
+        List[float]: 向量表示（已归一化，适合余弦相似度）
+    """
+    return EmbeddingService.get_instance().embed_chunk(query)
 
 
 def _build_summary_record(
