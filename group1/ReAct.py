@@ -79,6 +79,12 @@ class ReActAgent:
         self.max_steps = max_steps
         self.history: List[str] = []
 
+        # 预热 embedding 模型，避免首次查询时加载卡顿
+        try:
+            _ = self.embed_db.embedding_service.embed_batch(["预热"], batch_size=1)
+        except Exception as exc:
+            print(f"[WARN] embedding 预热失败: {exc}")
+
         # 注册三个包装后的工具（单字符串入参，供 ReAct Action 调用）
         tool_executor.registerTool(
             "GetRAGHistory",
