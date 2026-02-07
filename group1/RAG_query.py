@@ -115,6 +115,60 @@ class Embed_db:
         hits = result.get("hits", [])
         return [hit.get("text", "") for hit in hits]
 
+    def query_hybrid(self, query_text: str, query_embeddings: List[float], top_k: int) -> List[str]:
+        """
+        混合检索：向量相似度 + 关键词召回，合并去重后返回文本。
+        """
+        vector_result = self.vector_store.similarity_search(
+            query_text=query_text,
+            top_k=top_k,
+            filters={"deleted": False},
+            query_embedding=query_embeddings,
+        )
+        keyword_result = self.vector_store.keyword_search(
+            query_text=query_text,
+            top_k=top_k,
+            filters={"deleted": False},
+        )
+
+        def _index_hits(result: dict) -> dict:
+            index = {}
+            for hit in result.get("hits", []):
+                cid = hit.get("chunk_id")
+                if not cid:
+                    continue
+                index[cid] = hit
+            return index
+
+        vector_hits = _index_hits(vector_result)
+        keyword_hits = _index_hits(keyword_result)
+        max_kw = max([h.get("score", 0.0) for h in keyword_hits.values()] + [0.0])
+
+        merged = {}
+        for cid, hit in vector_hits.items():
+            merged[cid] = {
+                "text": hit.get("text", ""),
+                "score_vector": float(hit.get("score", 0.0)),
+                "score_kw": 0.0,
+            }
+        for cid, hit in keyword_hits.items():
+            if cid not in merged:
+                merged[cid] = {
+                    "text": hit.get("text", ""),
+                    "score_vector": 0.0,
+                    "score_kw": float(hit.get("score", 0.0)),
+                }
+            else:
+                merged[cid]["score_kw"] = float(hit.get("score", 0.0))
+
+        def _final_score(item: dict) -> float:
+            kw = item.get("score_kw", 0.0)
+            kw_norm = (kw / max_kw) if max_kw > 0 else 0.0
+            return float(item.get("score_vector", 0.0)) + 0.2 * kw_norm
+
+        ranked = sorted(merged.values(), key=_final_score, reverse=True)
+        return [r.get("text", "") for r in ranked[:top_k]]
+
 
 
 class RAG_query:
@@ -158,7 +212,7 @@ class RAG_query:
         query_embeddings = self._get_query_embeddings(query)
 
         # 调用向量数据库查询（传递 query_text 和 query_embeddings）
-        self.retrieved_chunks = embed_db.query(query, query_embeddings, self.top_k)
+        self.retrieved_chunks = embed_db.query_hybrid(query, query_embeddings, self.top_k)
 
 
     def rerank(self, query: str, retrieved_chunks: List[str], top_k: int = 3) -> None:
@@ -173,15 +227,19 @@ class RAG_query:
             self.reranked_chunks = []
             print("召回结果为空！请先进行召回！")
             return
-        from sentence_transformers import CrossEncoder
-        cross_encoder = CrossEncoder('cross-encoder/mmarco-mMiniLMv2-L12-H384-v1')
-        pairs = [(query, chunk) for chunk in retrieved_chunks]
-        scores = cross_encoder.predict(pairs)
+        try:
+            from sentence_transformers import CrossEncoder
+            cross_encoder = CrossEncoder('cross-encoder/mmarco-mMiniLMv2-L12-H384-v1')
+            pairs = [(query, chunk) for chunk in retrieved_chunks]
+            scores = cross_encoder.predict(pairs)
 
-        scored_chunks = list(zip(retrieved_chunks, scores))
-        scored_chunks.sort(key=lambda x: x[1], reverse=True)
+            scored_chunks = list(zip(retrieved_chunks, scores))
+            scored_chunks.sort(key=lambda x: x[1], reverse=True)
 
-        self.reranked_chunks = [chunk for chunk, _ in scored_chunks][:top_k]
+            self.reranked_chunks = [chunk for chunk, _ in scored_chunks][:top_k]
+        except Exception as exc:
+            print(f"[WARN] rerank 失败，使用未重排结果: {exc}")
+            self.reranked_chunks = retrieved_chunks[:top_k]
 
 
 

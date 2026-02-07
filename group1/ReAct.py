@@ -55,8 +55,27 @@ Action: 你决定采取的行动，必须是以下格式之一:
 - `tool_name[tool_input]`: 调用一个可用工具。其中 GetRAGHistory 的 tool_input 为查询字符串；UpdateRAG 与 UpdateJcards 的 tool_input 为 JSON 字符串（见上方工具说明）。
 - `Finish[最终答案]`: 当你认为已经获得最终答案时。
 - 当你收集到足够的信息，能够回答用户的最终问题时，你必须在 Action: 字段后使用 `Finish["..."]` 来输出最终答案。
+补充约束（必须遵守）：
+- 每轮仅允许输出一个 Action 或 Finish，不得在同一轮输出多个 Action。
+- 不要输出 Observation 字段；Observation 只能由系统工具返回。
+- 如果需要多步操作，请分多轮逐步执行。
+- 先回答再写入：如果需要写入记忆，请先完成最终回答。系统会在回答后再次询问是否需要写入。
 
 现在，请开始吧！
+"""
+
+MEMORY_SYSTEM_PROMPT = """
+你是一个记忆写入判定助手。根据用户输入与最终回答，判断是否需要写入记忆。
+写入规则（务必遵守）：
+1) 短期、非结构化、对话上下文型信息 → 写入 RAG（UpdateRAG）。
+2) 长期稳定、可结构化的个人事实 → 写入 Jcards（UpdateJcards）。
+3) 仅是询问或无新增事实 → 不写入，输出 Finish["NO_WRITE"]。
+4) 事件/轶事/经历/临时计划/地点-时间描述 必须写入 RAG，不得写入 Jcards。
+输出格式：
+Action: tool_name[tool_input] 或 Finish["NO_WRITE"]
+只输出 Action 行，不要输出 Thought/Observation。
+可用工具如下:
+{tools}
 """
 
 # 用户输入以下命令之一时结束交互式会话
@@ -111,7 +130,8 @@ class ReActAgent:
                 embed_db=self.embed_db,
             )
             if isinstance(chunks, list):
-                return "\n".join(chunks) if chunks else "（未检索到相关历史片段。）"
+                filtered = self._filter_rag_chunks(tool_input, chunks)
+                return "\n".join(filtered) if filtered else "（未检索到相关历史片段。）"
             return str(chunks)
         except Exception as e:
             return f"RAG 查询出错: {e}"
@@ -241,6 +261,7 @@ class ReActAgent:
                 # #endregion
                 break
 
+            response_text = self._sanitize_model_output(response_text)
             self.history.append(response_text)
             thought, action = self._parse_output(response_text)
             # #region agent log
@@ -249,11 +270,10 @@ class ReActAgent:
             if thought:
                 print(f"🤔 思考: {thought}")
             else:
-                print("警告：未能解析出有效的Action，流程终止。")
+                print("警告：未能解析出 Thought，将继续尝试执行 Action。")
                 # #region agent log
-                _log_debug("debug-session", "run1", "D", "ReAct.py:210", "没有解析出 thought，提前 break", {})
+                _log_debug("debug-session", "run1", "D", "ReAct.py:210", "没有解析出 thought，继续执行", {})
                 # #endregion
-                break
             if action is None:
                 self.history.append(
                     "Observation: 未能解析出 Action，请按格式输出 Action: tool_name[tool_input] 或 Finish[答案]。"
@@ -262,6 +282,11 @@ class ReActAgent:
                 _log_debug("debug-session", "run1", "D", "ReAct.py:213", "action 为 None，继续循环", {})
                 # #endregion
                 continue
+            if response_text.count("Action:") > 1:
+                self.history.append(
+                    "Observation: 检测到多个 Action，请仅输出一个 Action 或 Finish。"
+                )
+                continue
 
             if action.startswith("Finish"):
                 final_answer = self._parse_action_input(action)
@@ -269,6 +294,7 @@ class ReActAgent:
                 # #region agent log
                 _log_debug("debug-session", "run1", "F", "ReAct.py:219", "检测到 Finish action，准备返回", {"final_answer": final_answer})
                 # #endregion
+                self._post_answer_memory_write(question, final_answer)
                 return final_answer
 
             tool_name, tool_input = self._parse_action(action)
@@ -279,6 +305,18 @@ class ReActAgent:
             if not tool_input:
                 self.history.append(
                     "Observation: 工具输入不能为空，请提供有效的查询或 JSON。"
+                )
+                continue
+            if tool_name in {"UpdateRAG", "UpdateJcards"}:
+                self.history.append(
+                    "Observation: 请先完成最终回答（Finish），写入记忆将在回答后处理。"
+                )
+                continue
+            if tool_name == "UpdateRAG" and self._should_block_rag_write(
+                question, tool_input
+            ):
+                self.history.append(
+                    "Observation: 当前输入未包含新增事实，仅为询问，已跳过写入。请直接回答或检索。"
                 )
                 continue
 
@@ -341,10 +379,13 @@ class ReActAgent:
                 print("\n🤖 Agent：（本轮未能得到答案，您可以继续提问。）\n")
     # route: 1-1-3 将模型的thought和action从模型输出text中分离出来，返回thought, action
     def _parse_output(self, text: str):
-        thought_match = re.search(r"Thought: (.*)", text)
-        action_match = re.search(r"Action: (.*)", text)
+        thought_match = re.search(r"Thought:\s*(.*?)(?:\nAction:|$)", text, re.DOTALL)
+        action_match = re.search(r"Action:\s*(.*)", text, re.DOTALL)
         thought = thought_match.group(1).strip() if thought_match else None
         action = action_match.group(1).strip() if action_match else None
+        if action:
+            # Strip any trailing sections accidentally included
+            action = re.split(r"\n(?:Thought:|Observation:)", action)[0].strip()
         return thought, action
 
     # route: 1-1-5
@@ -353,8 +394,12 @@ class ReActAgent:
     #  _parse_action 处理后：
     #  返回("Search", "OpenAI最新消息")
     def _parse_action(self, action_text: str):
-        match = re.match(r"(\w+)\[(.*)\]", action_text)
-        return (match.group(1), match.group(2)) if match else (None, None)
+        match = re.match(r"(\w+)\s*\[", action_text)
+        if not match:
+            return (None, None)
+        name = match.group(1)
+        content = self._extract_bracket_content(action_text, prefix=f"{name}[")
+        return (name, content) if content is not None else (None, None)
 
     # route: 1-1-4
     #  用户问："中国的首都是哪里？"
@@ -364,9 +409,208 @@ class ReActAgent:
     #  3.我应该输出Finish[北京]
     #  该函数功能为提取Finish后【】里的字符串
     def _parse_action_input(self, action_text: str):
-        match = re.match(r"Finish\[(.*)\]", action_text, re.DOTALL)
-        # match = re.match(r"\w+\[(.*)\]", action_text)
-        return match.group(1) if match else ""
+        content = self._extract_bracket_content(action_text, prefix="Finish[")
+        return content if content is not None else ""
+
+    def _filter_rag_chunks(self, query: str, chunks: List[str]) -> List[str]:
+        tokens = re.findall(r"[\u4e00-\u9fff]+|\w+", query)
+        tokens = [t.lower() for t in tokens if len(t.strip()) >= 2]
+        if not tokens:
+            return chunks
+        scored = []
+        for chunk in chunks:
+            lowered = chunk.lower()
+            score = sum(1 for t in tokens if t in lowered)
+            scored.append((score, chunk))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        if scored and scored[0][0] == 0:
+            return []
+        return [c for s, c in scored if s > 0][:3]
+
+    def _should_block_rag_write(self, question: str, tool_input: str) -> bool:
+        try:
+            data = json.loads(tool_input)
+        except json.JSONDecodeError:
+            return False
+        concluded = str(data.get("concluded_content", "")).strip()
+        if not concluded:
+            return False
+        has_question_mark = ("?" in question) or ("？" in question) or ("吗" in question)
+        mentions_ask = any(k in concluded for k in ["询问", "提问", "问", "是否"])
+        mentions_new_fact = any(
+            k in concluded
+            for k in [
+                "提到",
+                "表示",
+                "说",
+                "告诉",
+                "计划",
+                "打算",
+                "准备",
+                "决定",
+                "安排",
+                "过期",
+                "喜欢",
+                "不喜欢",
+                "讨厌",
+                "过敏",
+                "住址",
+                "地址",
+                "电话",
+                "邮箱",
+                "生日",
+                "职业",
+                "工作",
+                "学校",
+                "关系",
+                "朋友",
+                "家人",
+                "将",
+                "将在",
+                "已经",
+                "刚刚",
+                "旅游",
+                "旅行",
+            ]
+        )
+        if has_question_mark and mentions_ask and not mentions_new_fact:
+            return True
+        return False
+
+    def _get_tools_description(self, names: List[str]) -> str:
+        parts = []
+        for name in names:
+            info = self.tool_executor.tools.get(name)
+            if info:
+                parts.append(f"- {name}: {info['description']}")
+        return "\n".join(parts)
+
+    def _post_answer_memory_write(self, question: str, final_answer: str) -> None:
+        try:
+            jcards_list = self.jcards_db.get_Jcards_tostr()
+        except Exception:
+            jcards_list = []
+        jcards_str = "\n".join(jcards_list) if jcards_list else "（暂无）"
+        tools_desc = self._get_tools_description(["UpdateRAG", "UpdateJcards"])
+        system_prompt = MEMORY_SYSTEM_PROMPT.format(tools=tools_desc)
+        prompt = (
+            f"用户请求: {question}\n"
+            f"最终回答: {final_answer}\n"
+            f"当前 Jcards 列表:\n{jcards_str}"
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        response_text = self.llm_client.think(messages=messages)
+        if not response_text:
+            return
+        response_text = self._sanitize_model_output(response_text)
+        _, action = self._parse_output(response_text)
+        if not action or action.startswith("Finish"):
+            return
+        tool_name, tool_input = self._parse_action(action)
+        if tool_name not in {"UpdateRAG", "UpdateJcards"} or tool_input is None:
+            return
+        tool_input = tool_input.strip()
+        if not tool_input:
+            return
+        if tool_name == "UpdateJcards" and self._should_reroute_jcard_to_rag(
+            tool_input
+        ):
+            reroute_input = self._build_rag_from_jcard(tool_input)
+            if reroute_input:
+                tool_name = "UpdateRAG"
+                tool_input = reroute_input
+        if tool_name == "UpdateRAG" and self._should_block_rag_write(
+            question, tool_input
+        ):
+            return
+        print(f"🧾 记忆写入: {tool_name}[{tool_input}]")
+        tool_function = self.tool_executor.getTool(tool_name)
+        if tool_function:
+            observation = tool_function(tool_input)
+            print(f"🧾 写入结果: {observation}")
+
+    def _should_reroute_jcard_to_rag(self, tool_input: str) -> bool:
+        try:
+            data = json.loads(tool_input)
+        except json.JSONDecodeError:
+            return False
+        card = data.get("card_content") or {}
+        title = str(card.get("title", "")).strip()
+        body = str(card.get("body", "")).strip()
+        text = f"{title} {body}"
+        if not text:
+            return False
+        episodic_markers = [
+            "在",
+            "当时",
+            "一边",
+            "之后",
+            "刚刚",
+            "昨天",
+            "今天",
+            "下雨",
+            "摔",
+            "摔跤",
+            "经历",
+            "趣事",
+            "临时",
+            "计划",
+            "打算",
+            "准备",
+            "旅行",
+            "旅游",
+        ]
+        return any(k in text for k in episodic_markers)
+
+    def _build_rag_from_jcard(self, tool_input: str) -> Optional[str]:
+        try:
+            data = json.loads(tool_input)
+        except json.JSONDecodeError:
+            return None
+        card = data.get("card_content") or {}
+        title = str(card.get("title", "")).strip()
+        body = str(card.get("body", "")).strip()
+        concluded = "；".join([t for t in [title, body] if t])
+        if not concluded:
+            return None
+        rag_payload = {
+            "action": "Add",
+            "concluded_content": concluded,
+            "conversation_id": "current",
+            "turn_id": 0,
+            "speaker": "user",
+            "timestamp": "当前时间",
+        }
+        return json.dumps(rag_payload, ensure_ascii=False)
+
+    def _extract_bracket_content(self, text: str, prefix: str) -> Optional[str]:
+        if not text.startswith(prefix):
+            return None
+        start = len(prefix)
+        depth = 1
+        i = start
+        while i < len(text):
+            ch = text[i]
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    return text[start:i]
+            i += 1
+        return None
+
+    def _sanitize_model_output(self, text: str) -> str:
+        # Remove any model-fabricated Observation lines to avoid history pollution
+        lines = []
+        for line in text.splitlines():
+            if line.strip().startswith("Observation:"):
+                continue
+            lines.append(line)
+        return "\n".join(lines).strip()
 
 
 if __name__ == "__main__":

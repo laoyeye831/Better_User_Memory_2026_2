@@ -34,6 +34,109 @@
       "version": 0,
       "superseded_by": null,
       "deleted": false
+    },
+    {
+      "card_id": "card_f7466cfd0e60124510d9362885f942c8bc7672fa",
+      "fact_key": "朋友李四的个人信息",
+      "value": {
+        "title": "朋友李四的个人信息",
+        "body": "姓名：李四\n过敏原：海产品\n兴趣：喜欢日本的高达模型",
+        "tags": [
+          "朋友信息",
+          "过敏",
+          "兴趣"
+        ],
+        "metadata": {
+          "记录时间": "当前对话",
+          "信息类型": "个人健康与偏好"
+        }
+      },
+      "content": "朋友李四的个人信息\n姓名：李四\n过敏原：海产品\n兴趣：喜欢日本的高达模型",
+      "backstory": "",
+      "person": "用户",
+      "relationship": "",
+      "status": "active",
+      "confidence": 0.6,
+      "source_ref": {
+        "conversation_id": "conv_unknown",
+        "turn_id": 0,
+        "speaker": "user",
+        "timestamp": "2026-02-06T09:45:15.474490"
+      },
+      "created_at": "2026-02-06T09:45:15.474532",
+      "updated_at": "2026-02-06T09:45:15.474532",
+      "event_id": "conv_unknown_0_user_1770342315",
+      "version": 0,
+      "superseded_by": null,
+      "deleted": false
+    },
+    {
+      "card_id": "card_c637da4cf07d96d219f86f14ba034914ab610a6e",
+      "fact_key": "用户张三的旅行计划",
+      "value": {
+        "title": "用户张三的旅行计划",
+        "body": "计划与朋友李四在明年10月份去日本旅行。",
+        "tags": [
+          "旅行计划",
+          "日本"
+        ],
+        "metadata": {
+          "记录时间": "当前对话",
+          "信息类型": "未来计划"
+        }
+      },
+      "content": "用户张三的旅行计划\n计划与朋友李四在明年10月份去日本旅行。",
+      "backstory": "",
+      "person": "用户",
+      "relationship": "",
+      "status": "active",
+      "confidence": 0.6,
+      "source_ref": {
+        "conversation_id": "conv_unknown",
+        "turn_id": 0,
+        "speaker": "user",
+        "timestamp": "2026-02-06T10:20:39.406165"
+      },
+      "created_at": "2026-02-06T10:20:39.406197",
+      "updated_at": "2026-02-06T10:20:39.406197",
+      "event_id": "conv_unknown_0_user_1770344439",
+      "version": 0,
+      "superseded_by": null,
+      "deleted": false
+    },
+    {
+      "card_id": "card_8ea462a24dc9b58d974bb7d674abd559e4d0e611",
+      "fact_key": "朋友李四的趣事",
+      "value": {
+        "title": "朋友李四的趣事",
+        "body": "李四在下雨天在东门，一边打伞一边吃臭豆腐，结果摔了一跤。",
+        "tags": [
+          "朋友信息",
+          "趣事"
+        ],
+        "metadata": {
+          "记录时间": "当前对话",
+          "信息类型": "个人经历"
+        }
+      },
+      "content": "朋友李四的趣事\n李四在下雨天在东门，一边打伞一边吃臭豆腐，结果摔了一跤。",
+      "backstory": "",
+      "person": "用户",
+      "relationship": "",
+      "status": "active",
+      "confidence": 0.6,
+      "source_ref": {
+        "conversation_id": "conv_unknown",
+        "turn_id": 0,
+        "speaker": "user",
+        "timestamp": "2026-02-06T10:22:59.252361"
+      },
+      "created_at": "2026-02-06T10:22:59.252390",
+      "updated_at": "2026-02-06T10:22:59.252390",
+      "event_id": "conv_unknown_0_user_1770344579",
+      "version": 0,
+      "superseded_by": null,
+      "deleted": false
     }
   ]
 }

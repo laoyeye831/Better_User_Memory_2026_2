@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass, field
@@ -205,6 +206,58 @@ class SQLiteVectorStoreService:
                     metadata=metas[ii],
                 )
             )
+
+        return {
+            "query_text": query_text,
+            "top_k": top_k,
+            "filters": where,
+            "hits": [h.model_dump() for h in hits],
+        }
+
+    def keyword_search(
+        self,
+        query_text: str,
+        top_k: int = 6,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        where = filters or {}
+        deleted = bool(where.get("deleted", False))
+        conversation_id = where.get("conversation_id")
+
+        tokens = re.findall(r"[\u4e00-\u9fff]+|\w+", query_text)
+        tokens = [t for t in tokens if len(t.strip()) >= 2]
+        if not tokens:
+            return {"query_text": query_text, "top_k": top_k, "filters": where, "hits": []}
+
+        sql = "SELECT chunk_id, text, metadata_json FROM chunks WHERE deleted = ?"
+        params: List[Any] = [1 if deleted else 0]
+        if conversation_id:
+            sql += " AND conversation_id = ?"
+            params.append(conversation_id)
+
+        like_parts = []
+        for t in tokens:
+            like_parts.append("text LIKE ?")
+            params.append(f"%{t}%")
+        sql += " AND (" + " OR ".join(like_parts) + ")"
+
+        rows = self._conn.execute(sql, params).fetchall()
+        if not rows:
+            return {"query_text": query_text, "top_k": top_k, "filters": where, "hits": []}
+
+        hits: List[SearchHit] = []
+        for chunk_id, text, meta_json in rows:
+            score = sum(1 for t in tokens if t in text)
+            hits.append(
+                SearchHit(
+                    chunk_id=chunk_id,
+                    score=float(score),
+                    text=text,
+                    metadata=json.loads(meta_json),
+                )
+            )
+        hits.sort(key=lambda h: h.score, reverse=True)
+        hits = hits[:top_k]
 
         return {
             "query_text": query_text,
